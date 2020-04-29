@@ -34,6 +34,7 @@ import java.util.Optional;
 import java.util.UUID;
 import javax.inject.Inject;
 import lombok.Data;
+import net.runelite.client.RuneLiteProperties;
 import net.runelite.client.discord.DiscordPresence;
 import net.runelite.client.discord.DiscordService;
 import net.runelite.client.ws.PartyService;
@@ -87,7 +88,22 @@ class DiscordState
 			return;
 		}
 
-		discordService.updatePresence(lastPresence);
+		final DiscordPresence.DiscordPresenceBuilder presenceBuilder = DiscordPresence.builder()
+			.state(lastPresence.getState())
+			.details(lastPresence.getDetails())
+			.largeImageText(lastPresence.getLargeImageText())
+			.startTimestamp(lastPresence.getStartTimestamp())
+			.smallImageKey(lastPresence.getSmallImageKey())
+			.partyMax(lastPresence.getPartyMax())
+			.partySize(party.getMembers().size());
+
+		if (party.isOwner())
+		{
+			presenceBuilder.partyId(partyId.toString());
+			presenceBuilder.joinSecret(party.getPartyId().toString());
+		}
+
+		discordService.updatePresence(presenceBuilder.build());
 	}
 
 	/**
@@ -106,9 +122,7 @@ class DiscordState
 		}
 		else
 		{
-			// If we aren't showing the elapsed time within Discord then
-			// We null out the event start property
-			event = new EventWithTime(eventType, config.hideElapsedTime() ? null : Instant.now());
+			event = new EventWithTime(eventType, Instant.now());
 
 			events.add(event);
 		}
@@ -154,11 +168,15 @@ class DiscordState
 			}
 		}
 
+		// Replace snapshot with + to make tooltip shorter (so it will span only 1 line)
+		final String versionShortHand = RuneLiteProperties.getVersion().replace("-SNAPSHOT", "+");
+
 		final DiscordPresence.DiscordPresenceBuilder presenceBuilder = DiscordPresence.builder()
 			.state(MoreObjects.firstNonNull(state, ""))
 			.details(MoreObjects.firstNonNull(details, ""))
-			.startTimestamp(event.getStart())
-			.smallImageKey(MoreObjects.firstNonNull(imageKey, "default"))
+			.largeImageText(RuneLiteProperties.getTitle() + " v" + versionShortHand)
+			.startTimestamp(config.hideElapsedTime() ? null : event.getStart())
+			.smallImageKey(imageKey)
 			.partyMax(PARTY_MAX)
 			.partySize(party.getMembers().size());
 
@@ -183,8 +201,26 @@ class DiscordState
 	 */
 	void checkForTimeout()
 	{
+		if (events.isEmpty())
+		{
+			return;
+		}
+
 		final Duration actionTimeout = Duration.ofMinutes(config.actionTimeout());
 		final Instant now = Instant.now();
+		final EventWithTime eventWithTime = events.get(0);
+
 		events.removeIf(event -> event.getType().isShouldTimeout() && now.isAfter(event.getUpdated().plus(actionTimeout)));
+
+		assert DiscordGameEventType.IN_MENU.getState() != null;
+		if (DiscordGameEventType.IN_MENU.getState().equals(eventWithTime.getType().getState()) && now.isAfter(eventWithTime.getStart().plus(actionTimeout)))
+		{
+			final DiscordPresence presence = lastPresence
+				.toBuilder()
+				.startTimestamp(null)
+				.build();
+			lastPresence = presence;
+			discordService.updatePresence(presence);
+		}
 	}
 }

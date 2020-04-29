@@ -26,6 +26,7 @@ package net.runelite.client.plugins.party;
 
 import com.google.inject.Binder;
 import com.google.inject.Provides;
+import java.awt.Color;
 import java.awt.event.KeyEvent;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
@@ -36,8 +37,8 @@ import java.util.Map;
 import java.util.UUID;
 import javax.annotation.Nullable;
 import javax.inject.Inject;
+import javax.inject.Named;
 import lombok.Getter;
-import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.ChatMessageType;
 import net.runelite.api.Client;
 import net.runelite.api.GameState;
@@ -47,9 +48,11 @@ import net.runelite.api.Skill;
 import net.runelite.api.SoundEffectID;
 import net.runelite.api.Tile;
 import net.runelite.api.coords.WorldPoint;
+import net.runelite.api.events.CommandExecuted;
 import net.runelite.api.events.FocusChanged;
 import net.runelite.api.events.GameTick;
 import net.runelite.api.events.MenuOptionClicked;
+import net.runelite.client.callback.ClientThread;
 import net.runelite.client.chat.ChatColorType;
 import net.runelite.client.chat.ChatMessageBuilder;
 import net.runelite.client.chat.ChatMessageManager;
@@ -71,6 +74,7 @@ import net.runelite.client.task.Schedule;
 import net.runelite.client.ui.overlay.OverlayManager;
 import net.runelite.client.ui.overlay.worldmap.WorldMapPoint;
 import net.runelite.client.ui.overlay.worldmap.WorldMapPointManager;
+import net.runelite.client.util.ColorUtil;
 import net.runelite.client.ws.PartyMember;
 import net.runelite.client.ws.PartyService;
 import net.runelite.client.ws.WSClient;
@@ -82,7 +86,6 @@ import net.runelite.http.api.ws.messages.party.UserSync;
 	name = "Party",
 	description = "Shows useful information about current party"
 )
-@Slf4j
 public class PartyPlugin extends Plugin implements KeyListener
 {
 	@Inject
@@ -118,6 +121,13 @@ public class PartyPlugin extends Plugin implements KeyListener
 	@Inject
 	private ChatMessageManager chatMessageManager;
 
+	@Inject
+	private ClientThread clientThread;
+
+	@Inject
+	@Named("developerMode")
+	boolean developerMode;
+
 	@Getter
 	private final Map<UUID, PartyData> partyDataMap = Collections.synchronizedMap(new HashMap<>());
 
@@ -125,7 +135,8 @@ public class PartyPlugin extends Plugin implements KeyListener
 	private final List<PartyTilePingData> pendingTilePings = Collections.synchronizedList(new ArrayList<>());
 
 	private int lastHp, lastPray;
-	private boolean hotkeyDown;
+	private boolean hotkeyDown, doSync;
+	private boolean sendAlert;
 
 	@Override
 	public void configure(Binder binder)
@@ -142,6 +153,7 @@ public class PartyPlugin extends Plugin implements KeyListener
 		wsClient.registerMessage(TilePing.class);
 		wsClient.registerMessage(LocationUpdate.class);
 		keyManager.registerKeyListener(this);
+		doSync = true; // Delay sync so eventbus can process correctly.
 	}
 
 	@Override
@@ -157,6 +169,8 @@ public class PartyPlugin extends Plugin implements KeyListener
 		wsClient.unregisterMessage(LocationUpdate.class);
 		keyManager.unregisterKeyListener(this);
 		hotkeyDown = false;
+		doSync = false;
+		sendAlert = false;
 	}
 
 	@Provides
@@ -185,7 +199,7 @@ public class PartyPlugin extends Plugin implements KeyListener
 				.build();
 
 			chatMessageManager.queue(QueuedMessage.builder()
-				.type(ChatMessageType.GAME)
+				.type(ChatMessageType.FRIENDSCHATNOTIFICATION)
 				.runeLiteFormattedMessage(leaveMessage)
 				.build());
 		}
@@ -226,22 +240,31 @@ public class PartyPlugin extends Plugin implements KeyListener
 		}
 
 		event.consume();
-		wsClient.send(new TilePing(selectedSceneTile.getWorldLocation()));
+		final TilePing tilePing = new TilePing(selectedSceneTile.getWorldLocation());
+		tilePing.setMemberId(party.getLocalMember().getMemberId());
+		wsClient.send(tilePing);
 	}
 
 	@Subscribe
 	public void onTilePing(TilePing event)
 	{
-		log.debug("Got tile ping {}", event);
-
 		if (config.pings())
 		{
-			pendingTilePings.add(new PartyTilePingData(event.getPoint()));
+			final PartyData partyData = getPartyData(event.getMemberId());
+			final Color color = partyData != null ? partyData.getColor() : Color.RED;
+			pendingTilePings.add(new PartyTilePingData(event.getPoint(), color));
 		}
 
 		if (config.sounds())
 		{
-			client.playSoundEffect(SoundEffectID.SMITH_ANVIL_TINK);
+			WorldPoint point = event.getPoint();
+
+			if (point.getPlane() != client.getPlane() || !WorldPoint.isInScene(client, point.getX(), point.getY()))
+			{
+				return;
+			}
+
+			clientThread.invoke(() -> client.playSoundEffect(SoundEffectID.SMITH_ANVIL_TINK));
 		}
 	}
 
@@ -271,6 +294,22 @@ public class PartyPlugin extends Plugin implements KeyListener
 	@Subscribe
 	public void onGameTick(final GameTick event)
 	{
+		if (sendAlert && client.getGameState() == GameState.LOGGED_IN)
+		{
+			sendAlert = false;
+			sendInstructionMessage();
+		}
+
+		if (doSync && !party.getMembers().isEmpty())
+		{
+			// Request sync
+			final UserSync userSync = new UserSync();
+			userSync.setMemberId(party.getLocalMember().getMemberId());
+			ws.send(userSync);
+		}
+
+		doSync = false;
+
 		final int currentHealth = client.getBoostedSkillLevel(Skill.HITPOINTS);
 		final int currentPrayer = client.getBoostedSkillLevel(Skill.PRAYER);
 		final int realHealth = client.getRealSkillLevel(Skill.HITPOINTS);
@@ -350,7 +389,7 @@ public class PartyPlugin extends Plugin implements KeyListener
 			.build();
 
 		chatMessageManager.queue(QueuedMessage.builder()
-			.type(ChatMessageType.GAME)
+			.type(ChatMessageType.FRIENDSCHATNOTIFICATION)
 			.runeLiteFormattedMessage(joinMessage)
 			.build());
 
@@ -358,15 +397,7 @@ public class PartyPlugin extends Plugin implements KeyListener
 
 		if (localMember != null && partyData.getMemberId().equals(localMember.getMemberId()))
 		{
-			final String helpMessage = new ChatMessageBuilder()
-				.append(ChatColorType.HIGHLIGHT)
-				.append("To leave party hold SHIFT and right click party stats overlay.")
-				.build();
-
-			chatMessageManager.queue(QueuedMessage.builder()
-				.type(ChatMessageType.GAME)
-				.runeLiteFormattedMessage(helpMessage)
-				.build());
+			sendAlert = true;
 		}
 	}
 
@@ -407,7 +438,7 @@ public class PartyPlugin extends Plugin implements KeyListener
 					.build();
 
 				chatMessageManager.queue(QueuedMessage.builder()
-					.type(ChatMessageType.GAME)
+					.type(ChatMessageType.FRIENDSCHATNOTIFICATION)
 					.runeLiteFormattedMessage(joinMessage)
 					.build());
 			}
@@ -423,6 +454,23 @@ public class PartyPlugin extends Plugin implements KeyListener
 		partyDataMap.clear();
 		pendingTilePings.clear();
 		worldMapManager.removeIf(PartyWorldMapPoint.class::isInstance);
+	}
+
+	@Subscribe
+	public void onCommandExecuted(CommandExecuted commandExecuted)
+	{
+		if (!developerMode || !commandExecuted.getCommand().equals("partyinfo"))
+		{
+			return;
+		}
+
+		chatMessageManager.queue(QueuedMessage.builder().type(ChatMessageType.GAMEMESSAGE).value("Party " + party.getPartyId()).build());
+		chatMessageManager.queue(QueuedMessage.builder().type(ChatMessageType.GAMEMESSAGE).value("Local Party " + party.getLocalPartyId()).build());
+		chatMessageManager.queue(QueuedMessage.builder().type(ChatMessageType.GAMEMESSAGE).value("Local ID " + party.getLocalMember().getMemberId()).build());
+		for (PartyMember partyMember : party.getMembers())
+		{
+			chatMessageManager.queue(QueuedMessage.builder().type(ChatMessageType.GAMEMESSAGE).value(" " + partyMember.getName() + " " + partyMember.getMemberId()).build());
+		}
 	}
 
 	@Nullable
@@ -451,7 +499,7 @@ public class PartyPlugin extends Plugin implements KeyListener
 				worldMapManager.add(worldMapPoint);
 			}
 
-			return new PartyData(u, name, worldMapPoint);
+			return new PartyData(u, name, worldMapPoint, ColorUtil.fromObject(name));
 		});
 	}
 
@@ -486,5 +534,18 @@ public class PartyPlugin extends Plugin implements KeyListener
 		{
 			hotkeyDown = false;
 		}
+	}
+
+	private void sendInstructionMessage()
+	{
+		final String helpMessage = new ChatMessageBuilder()
+			.append(ChatColorType.HIGHLIGHT)
+			.append("To leave party hold SHIFT and right click party stats overlay.")
+			.build();
+
+		chatMessageManager.queue(QueuedMessage.builder()
+			.type(ChatMessageType.FRIENDSCHATNOTIFICATION)
+			.runeLiteFormattedMessage(helpMessage)
+			.build());
 	}
 }

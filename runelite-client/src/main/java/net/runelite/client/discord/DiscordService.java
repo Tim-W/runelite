@@ -49,7 +49,6 @@ import net.runelite.discord.DiscordUser;
 public class DiscordService implements AutoCloseable
 {
 	private final EventBus eventBus;
-	private final RuneLiteProperties runeLiteProperties;
 	private final ScheduledExecutorService executorService;
 	private final DiscordRPC discordRPC;
 
@@ -62,12 +61,10 @@ public class DiscordService implements AutoCloseable
 	@Inject
 	private DiscordService(
 		final EventBus eventBus,
-		final RuneLiteProperties runeLiteProperties,
 		final ScheduledExecutorService executorService)
 	{
 
 		this.eventBus = eventBus;
-		this.runeLiteProperties = runeLiteProperties;
 		this.executorService = executorService;
 
 		DiscordRPC discordRPC = null;
@@ -78,7 +75,7 @@ public class DiscordService implements AutoCloseable
 			discordRPC = DiscordRPC.INSTANCE;
 			discordEventHandlers = new DiscordEventHandlers();
 		}
-		catch (UnsatisfiedLinkError e)
+		catch (Error e)
 		{
 			log.warn("Failed to load Discord library, Discord support will be disabled.");
 		}
@@ -106,7 +103,7 @@ public class DiscordService implements AutoCloseable
 		discordEventHandlers.joinGame = this::joinGame;
 		discordEventHandlers.spectateGame = this::spectateGame;
 		discordEventHandlers.joinRequest = this::joinRequest;
-		discordRPC.Discord_Initialize(runeLiteProperties.getDiscordAppId(), discordEventHandlers, true, null);
+		discordRPC.Discord_Initialize(RuneLiteProperties.getDiscordAppId(), discordEventHandlers, true, null);
 		executorService.scheduleAtFixedRate(discordRPC::Discord_RunCallbacks, 0, 2, TimeUnit.SECONDS);
 	}
 
@@ -150,9 +147,12 @@ public class DiscordService implements AutoCloseable
 			? "default"
 			: discordPresence.getLargeImageKey();
 		discordRichPresence.largeImageText = discordPresence.getLargeImageText();
-		discordRichPresence.smallImageKey = Strings.isNullOrEmpty(discordPresence.getSmallImageKey())
-			? "default"
-			: discordPresence.getSmallImageKey();
+
+		if (!Strings.isNullOrEmpty(discordPresence.getSmallImageKey()))
+		{
+			discordRichPresence.smallImageKey = discordPresence.getSmallImageKey();
+		}
+
 		discordRichPresence.smallImageText = discordPresence.getSmallImageText();
 		discordRichPresence.partyId = discordPresence.getPartyId();
 		discordRichPresence.partySize = discordPresence.getPartySize();

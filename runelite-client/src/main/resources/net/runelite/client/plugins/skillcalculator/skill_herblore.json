@@ -49,6 +49,12 @@
       "xp": 50
     },
     {
+      "level": 18,
+      "icon": 4419,
+      "name": "Guthix Rest (3)",
+      "xp": 59
+    },
+    {
       "level": 19,
       "icon": 10142,
       "name": "Guam tar",
@@ -59,6 +65,12 @@
       "icon": 255,
       "name": "Harralander",
       "xp": 6.3
+    },
+    {
+      "level": 22,
+      "icon": 6472,
+      "name": "Compost Potion (3)",
+      "xp": 60
     },
     {
       "level": 22,
@@ -271,6 +283,12 @@
       "xp": 76.5
     },
     {
+      "level": 77,
+      "icon": 12625,
+      "name": "Stamina Potion (4)",
+      "xp": 102
+    },
+    {
       "level": 78,
       "icon": 189,
       "name": "Zamorak Brew (3)",
@@ -281,6 +299,18 @@
       "icon": 5954,
       "name": "Antidote++ (3)",
       "xp": 177.5
+    },
+    {
+      "level": 80,
+      "icon": 22464,
+      "name": "Bastion Potion (3)",
+      "xp": 155
+    },
+    {
+      "level": 80,
+      "icon": 22452,
+      "name": "Battlemage Potion (3)",
+      "xp": 155
     },
     {
       "level": 81,

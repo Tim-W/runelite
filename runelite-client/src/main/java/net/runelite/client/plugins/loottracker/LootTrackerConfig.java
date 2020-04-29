@@ -50,11 +50,43 @@ public interface LootTrackerConfig extends Config
 	void setIgnoredItems(String key);
 
 	@ConfigItem(
+		keyName = "priceType",
+		name = "Price Type",
+		description = "What type of price to use for calculating value."
+	)
+	default LootTrackerPriceType priceType()
+	{
+		return LootTrackerPriceType.GRAND_EXCHANGE;
+	}
+
+	@ConfigItem(
+		keyName = "showPriceType",
+		name = "Show Price Type",
+		description = "Whether to show a GE: or HA: next to the total values in the tracker"
+	)
+	default boolean showPriceType()
+	{
+		return false;
+	}
+
+	@ConfigItem(
 		keyName = "saveLoot",
-		name = "Save loot",
-		description = "Save loot between client sessions (requires being logged in)"
+		name = "Submit loot tracker data",
+		description = "Submit loot tracker data (requires being logged in)"
 	)
 	default boolean saveLoot()
+	{
+		return true;
+	}
+
+	@ConfigItem(
+		keyName = "syncPanel",
+		name = "Synchronize panel contents",
+		description = "Synchronize your local loot tracker with your online (requires being logged in). This means" +
+			" that panel is filled with portion of your remote data on startup and deleting data in panel deletes them" +
+			" also on server."
+	)
+	default boolean syncPanel()
 	{
 		return true;
 	}
